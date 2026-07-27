@@ -1,0 +1,18 @@
+{
+	"ver": 1,
+	"version": "1.3.0",
+	"name": "Cursor Smith",
+	"icon": "wand",
+	"description": "Forge your text cursor — styles, colors, smooth motion, blinking, particle effects, and a torch spotlight.",
+	"instructions": "Cursor Smith replaces Thymer's text caret with a canvas-rendered cursor. Pick a style, tune the look, and layer on motion and effects — everything applies live. Save a look as a preset and share it with a code. Ported from Cursor-Smith by SadSnake1 (MIT).",
+	"author": "@akaready",
+	"homepage": "https://akaready.com",
+	"repository": "https://github.com/akaready/thymer-cursor-smith",
+	"coffee": "https://buymeacoffee.com/akaready",
+	"__source_repo": "https://github.com/akaready/thymer-cursor-smith",
+	"__source_files": {
+		"branch": "main",
+		"json": "plugin.json",
+		"js": "plugin.js"
+	}
+}
