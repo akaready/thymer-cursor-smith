@@ -3667,7 +3667,7 @@ ${report}
     // --- structural -------------------------------------------------------
     enabled: true,
     cursorStyle: "Box",
-    // Line | Box | Underline
+    // None | Line | Box | Underline
     // --- flat color, one per appearance ------------------------------------
     colorDark: "#39ff14",
     colorLight: "#333333",
@@ -3725,6 +3725,7 @@ ${report}
     thunderstrike: false,
     thunderstrikeSize: 2,
     thunderstrikeStrength: 0.5,
+    thunderstrikeHalo: true,
     stardustEnabled: false,
     stardustAlwaysOn: false,
     stardustDelayMs: 2e3,
@@ -3750,7 +3751,6 @@ ${report}
     overlayDarkness: 0.7,
     overlayIntensity: 0.1,
     overlayColor: "#ff963c",
-    overlayFlicker: false,
     overlayBlinkSync: false,
     overlayBlinkDepth: 0.25,
     overlaySpeed: 0.22,
@@ -3758,7 +3758,6 @@ ${report}
     idleFadeEnabled: false,
     idleFadeDelayMs: 4e3,
     idleFadeTo: 0.25,
-    idleDrift: false,
     // --- context-aware colour ----------------------------------------------
     selectionColorEnabled: false,
     selectionColorDark: "#ffd166",
@@ -3835,7 +3834,9 @@ ${report}
     soundVariation: { min: 0, max: 1, step: 0.01 }
   };
   var ENUMS = {
-    cursorStyle: ["Line", "Box", "Underline"],
+    // 'None' paints no cursor body and leaves Thymer's own caret visible, so the
+    // effects layer purely additively on top of it.
+    cursorStyle: ["None", "Line", "Box", "Underline"],
     overlayFollowMode: ["caret", "mouse", "auto"]
   };
   var HEX_KEYS = /* @__PURE__ */ new Set([
@@ -4102,7 +4103,10 @@ ${report}
       return fam[Math.floor(rand() * fam.length)];
     }, "hex");
     const out = {
-      cursorStyle: pick(ENUMS.cursorStyle),
+      // 'None' excluded: with four styles in the pool roughly one roll in four
+      // would produce no visible cursor, which reads as the randomiser being
+      // broken rather than as a deliberate style.
+      cursorStyle: pick(ENUMS.cursorStyle.filter((v) => v !== "None")),
       colorDark: hex(),
       colorLight: hex(),
       caretWidthPx: num("caretWidthPx"),
@@ -4243,11 +4247,30 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels .panel [c
 
 /* Outside the editor panels \u2014 palette, search boxes, rename fields \u2014 the
    generic caret path draws our cursor, so the native one is redundant there
-   too. Scoped to the app shell so the plugin editor Preview keeps its caret. */
+   too.
+
+   Modals are listed explicitly because several of them mount OUTSIDE
+   .app-chrome-panels, and the app-shell scope alone therefore missed them:
+   the browser's caret kept blinking in a dropdown or link menu while our
+   non-blinking one was drawn on top of it. Two carets, one of them blinking,
+   is the most literal form of the reported flicker.
+
+   Still gated on the body classes, so the plugin editor's Preview pane \u2014 which
+   never carries them \u2014 keeps its own caret. */
 body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels input,
 body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels textarea,
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels [contenteditable="true"],
 body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog input,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea,
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog [contenteditable="true"],
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .dropdown input,
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .dropdown textarea,
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .dropdown [contenteditable="true"],
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .modal-container input,
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .modal-container textarea,
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .modal-container [contenteditable="true"],
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible input,
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible [contenteditable="true"] {
 	caret-color: transparent !important;
 }
 
@@ -4462,6 +4485,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
 `;
 
   // caret.js
+  var THYMER_CARET_GRACE_MS = 120;
   var CARET_EL_SEL = "div.listview-caret-self";
   var FOCUSED_PANEL_SEL = ".panel.focused-panel, .panel.has-focus";
   var LISTITEM_SEL = ".listitem[data-guid]";
@@ -4945,11 +4969,18 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
       const t = thymerCaretCoords(e);
       if (t) {
         e._caretSource = "thymer";
+        e._lastThymerCaretT = performance.now();
+        t.src = "thymer";
         return t;
+      }
+      if (performance.now() - (e._lastThymerCaretT || 0) < THYMER_CARET_GRACE_MS) {
+        return e.lastActive && e._caretSource === "thymer" ? e.lastActive : null;
       }
     }
     e._caretSource = "generic";
-    return genericCaretCoords(e);
+    const g = genericCaretCoords(e);
+    if (g) g.src = "generic";
+    return g;
   }
   __name(caretCoords, "caretCoords");
 
@@ -5385,7 +5416,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
   }
   __name(pixelateBolt, "pixelateBolt");
   function spawnThunderbolt(e, target) {
-    if (!e.settings.flameTrail || !e.settings.thunderstrike) return;
+    if (!e.settings.thunderstrike) return;
     if (!target) return;
     while (e.thunderbolts.length >= THUNDER_MAX_LIVE) e.thunderbolts.shift();
     const w = target.w || target.actualCharWidth || 8;
@@ -5502,15 +5533,14 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
     if (!e.thunderbolts.length) return;
     const ctx = e.ctx;
     const now = performance.now();
-    const opacity = Math.max(0, Math.min(1, e.settings.cursorOpacity ?? 1));
     const strength = Math.max(0.1, Math.min(1, e.settings.thunderstrikeStrength ?? 0.5));
-    const halo = !!e.settings.glow;
+    const halo = !!e.settings.thunderstrikeHalo;
     e.thunderbolts = e.thunderbolts.filter((b) => {
       const t = (now - b.start) / THUNDER_LIFE_MS;
       if (t >= 1) return false;
       const fade = t < 0.12 ? 1 : 1 - (t - 0.12) / 0.88;
       const step = Math.min(b.flicker.length - 1, Math.floor(t * b.flicker.length));
-      const alpha = Math.max(0, fade * b.flicker[step] * opacity * strength);
+      const alpha = Math.max(0, fade * b.flicker[step] * strength);
       if (alpha <= 0.02) return true;
       const cell = b.cell;
       ctx.save();
@@ -5621,14 +5651,13 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
   function drawStardust(e) {
     if (!e.stardust.length) return;
     const now = performance.now();
-    const opacity = Math.max(0, Math.min(1, e.settings.cursorOpacity ?? 1));
     e.stardust = e.stardust.filter((p) => {
       const elapsed = (now - p.start) / 1e3;
       if (elapsed > p.life) return false;
       const t = elapsed / p.life;
       const envelope = t < 0.2 ? t / 0.2 : 1 - (t - 0.2) / 0.8;
       const twinkle = 0.72 + 0.28 * Math.sin(elapsed * p.twinkleSpeed + p.phase);
-      const alpha = Math.max(0, envelope * twinkle * opacity);
+      const alpha = Math.max(0, envelope * twinkle);
       if (alpha <= 0.01) return true;
       if (p.orbit) {
         const anchor = e.animActive;
@@ -5659,7 +5688,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
     const prefix = e.isDarkTheme() ? "gradientDark" : "gradientLight";
     const out = [];
     for (let i = 1; i <= n; i++) {
-      let hex = s[prefix + i];
+      let hex = e.tintColor(s[prefix + i]);
       if (s.speedDemon && e.heat > 0) hex = e.heatColorFor(e.heat, hex);
       out.push(hex);
     }
@@ -5814,6 +5843,34 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
     ctx.fill();
   }
   __name(fillCursorShape, "fillCursorShape");
+  function drawTrail(e) {
+    if (!e.settings.crtEffect) return;
+    const ctx = e.ctx;
+    const style = e.styleFor("cursorStyle");
+    const color = e.getActiveColor();
+    const opacity = Math.max(0, Math.min(1, e.settings.cursorOpacity ?? 1)) * e.idleAlpha();
+    const hollow = style === "Box" && e.styleFor("boxHollow");
+    const strokeW = hollow ? Math.max(1, Math.min(8, e.settings.boxHollowWidth || 2)) : 0;
+    forEachTrailPoint(e, (p, alpha) => {
+      if (style === "Underline") {
+        const uThickness = underlineThickness(e, p.h);
+        const ty = p.y + p.h - uThickness;
+        ctx.fillStyle = cursorPaint(e, p.x, ty, p.w, uThickness, color, alpha * opacity);
+        ctx.fillRect(p.x, ty, p.w, uThickness);
+        return;
+      }
+      if (hollow) {
+        ctx.strokeStyle = cursorPaint(e, p.x, p.y, p.w, p.h, color, alpha * opacity);
+        ctx.lineWidth = strokeW;
+        const inset = strokeW / 2;
+        ctx.strokeRect(p.x + inset, p.y + inset, Math.max(0, p.w - strokeW), Math.max(0, p.h - strokeW));
+        return;
+      }
+      ctx.fillStyle = cursorPaint(e, p.x, p.y, p.w, p.h, color, alpha * opacity);
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+    });
+  }
+  __name(drawTrail, "drawTrail");
   function drawLineCaret(e, isUnderline) {
     const ctx = e.ctx;
     const settings = e.settings;
@@ -5821,22 +5878,11 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
     const now = performance.now();
     const trailColor = e.getActiveColor();
     const opacity = Math.max(0, Math.min(1, settings.cursorOpacity ?? 1)) * e.idleAlpha();
-    forEachTrailPoint(e, (p, alpha2) => {
-      if (isUnderline) {
-        const uThickness = underlineThickness(e, p.h);
-        const ty = p.y + p.h - uThickness;
-        ctx.fillStyle = cursorPaint(e, p.x, ty, p.w, uThickness, trailColor, alpha2 * opacity);
-        ctx.fillRect(p.x, ty, p.w, uThickness);
-      } else {
-        ctx.fillStyle = cursorPaint(e, p.x, p.y, p.w, p.h, trailColor, alpha2 * opacity);
-        ctx.fillRect(p.x, p.y, p.w, p.h);
-      }
-    });
     if (!active) return;
     const alpha = blinkAlpha(e, now);
     const color = e.getActiveColor() || active.textColor || "#ffffff";
     ctx.save();
-    if ((settings.crtEffect || comboGlow(e) > 0) && settings.glow) {
+    if (settings.glow || comboGlow(e) > 0) {
       ctx.shadowColor = color;
       ctx.shadowBlur = (8 + comboGlow(e) * 14) * alpha;
     }
@@ -5879,23 +5925,12 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
     const opacity = Math.max(0, Math.min(1, settings.cursorOpacity ?? 1)) * e.idleAlpha();
     const hollow = e.styleFor("boxHollow");
     const strokeW = hollow ? Math.max(1, Math.min(8, settings.boxHollowWidth || 2)) : 0;
-    forEachTrailPoint(e, (p, alpha2) => {
-      if (hollow) {
-        ctx.strokeStyle = cursorPaint(e, p.x, p.y, p.w, p.h, color, alpha2 * opacity);
-        ctx.lineWidth = strokeW;
-        const inset = strokeW / 2;
-        ctx.strokeRect(p.x + inset, p.y + inset, Math.max(0, p.w - strokeW), Math.max(0, p.h - strokeW));
-      } else {
-        ctx.fillStyle = cursorPaint(e, p.x, p.y, p.w, p.h, color, alpha2 * opacity);
-        ctx.fillRect(p.x, p.y, p.w, p.h);
-      }
-    });
     const active = e.animActive;
     if (!active) return;
     const alpha = blinkAlpha(e, now);
     const renderW = active.w;
     ctx.save();
-    if ((settings.crtEffect || comboGlow(e) > 0) && settings.glow) {
+    if (settings.glow || comboGlow(e) > 0) {
       ctx.shadowColor = color;
       ctx.shadowBlur = (10 + comboGlow(e) * 16) * alpha;
     }
@@ -5947,6 +5982,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
   function drawGhost(e) {
     const g = e._ghost;
     if (!e.settings.ghostEnabled || !g) return;
+    if (e.styleFor("cursorStyle") === "None") return;
     if (Math.abs(g.x - e.animActive.x) < 0.5 && Math.abs(g.top - e.animActive.top) < 0.5) return;
     const ctx = e.ctx;
     const alpha = Math.max(0, Math.min(1, e.settings.ghostOpacity ?? 0.3)) * e.idleAlpha();
@@ -5982,6 +6018,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
       ctx.translate(shake.x, shake.y);
       e._dirtyFull = true;
     }
+    drawTrail(e);
     drawGhost(e);
     drawLetterParticles(e);
     drawStardust(e);
@@ -6016,6 +6053,12 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
       ctx.translate(-cx, -cy);
     }
     switch (e.styleFor("cursorStyle")) {
+      // Paints no body at all: Thymer's own caret stays visible (plugin.js keeps
+      // the hide-native class off for this style) and every effect layers on
+      // top of it. The trail above is deliberately outside this switch so it
+      // still runs here.
+      case "None":
+        break;
       case "Line":
         drawLineCaret(e, false);
         break;
@@ -6570,6 +6613,26 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
   var ENERGY_FRAME_MS = 33;
   var ROW_TYPE_STEP = { text: 0, heading: 1, task: -1, code: 2, quote: -2, list: 0.5 };
   var COMBO_IDLE_MS = 1200;
+  var GEOMETRY_DEADBAND_PX = 0.75;
+  function adoptContent(prev, next) {
+    const out = { ...prev };
+    out.char = next.char;
+    out.textColor = next.textColor;
+    out.fontSize = next.fontSize;
+    out.fontFamily = next.fontFamily;
+    out.actualCharWidth = next.actualCharWidth;
+    out.rowType = next.rowType;
+    out.pos = next.pos;
+    out.focused = next.focused;
+    if (Math.abs((prev.h || 0) - (next.h || 0)) > GEOMETRY_DEADBAND_PX) {
+      out.h = next.h;
+      out.bottom = next.bottom;
+      out.top = next.top;
+    }
+    if (Math.abs((prev.w || 0) - (next.w || 0)) > GEOMETRY_DEADBAND_PX) out.w = next.w;
+    return out;
+  }
+  __name(adoptContent, "adoptContent");
   var CursorEngine = class {
     static {
       __name(this, "CursorEngine");
@@ -6641,6 +6704,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
       this._chromeCache = null;
       this._modalOpen = false;
       this._caretSource = "thymer";
+      this._lastThymerCaretT = 0;
       this._rowType = "text";
       this._selectionActive = false;
       this._ghost = null;
@@ -6703,11 +6767,27 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
       if (this.settings.selectionColorEnabled && this._selectionActive) {
         return dark ? this.settings.selectionColorDark : this.settings.selectionColorLight;
       }
-      const base = this.settings.gradientEnabled ? gradientStops(this)[0] : dark ? this.settings.colorDark : this.settings.colorLight;
-      if (!this.settings.rowTypeTint) return base;
+      const base = this.settings.gradientEnabled ? this.settings[dark ? "gradientDark1" : "gradientLight1"] : dark ? this.settings.colorDark : this.settings.colorLight;
+      return this.tintColor(base);
+    }
+    /**
+     * Apply the row-type hue shift to one colour.
+     *
+     * Split out so the gradient path can use it too. It previously read its stops
+     * straight from settings, which meant the tints reached the ghost and every
+     * particle — those go through getActiveColor — but not the cursor body or its
+     * trail. Half the cursor changed colour and half did not.
+     *
+     * Hue-shift rather than substitute, so every row type still reads as the
+     * user's own colour. The multipliers are arbitrary but stable: the point is
+     * that the types are distinguishable, not that they hit specific hues.
+     * @param {string} hex @returns {string}
+     */
+    tintColor(hex) {
+      if (!this.settings.rowTypeTint || !hex) return hex;
       const amount = this.settings.rowTypeTintAmount || 0;
       const step = ROW_TYPE_STEP[this._rowType || "text"] || 0;
-      return step ? shiftHue(base, amount * step) : base;
+      return step ? shiftHue(hex, amount * step) : hex;
     }
     /**
      * Whether a non-collapsed selection exists. Thymer paints multi-line
@@ -6733,7 +6813,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
     }
     getActiveColor() {
       const base = this.getBaseColor();
-      if (!this.settings.speedDemon) return base;
+      if (!this.settings.speedDemon || this.heat <= 0) return base;
       return heatColor(this.heat, base);
     }
     /** @param {number} pos @param {boolean} [cyclic] */
@@ -6802,9 +6882,14 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
         this.pending = null;
         return;
       }
+      if (caret.src !== this.lastActive.src) {
+        this.lastActive = caret;
+        this.snapMotionTo(caret);
+        return;
+      }
       const moved = Math.abs(this.lastActive.x - caret.x) > 0.5 || Math.abs(this.lastActive.top - caret.top) > 0.5;
       if (!moved) {
-        if (!this.pending) this.lastActive = caret;
+        if (!this.pending) this.lastActive = adoptContent(this.lastActive, caret);
         return;
       }
       if (caret.pos !== null && caret.pos === this.lastActive.pos) {
@@ -6939,6 +7024,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
     /** @param {any} point */
     pushTrail(point) {
       if (!point) return;
+      if (!this.settings.crtEffect) return;
       this.trail.push({ x: point.x, y: point.top, w: point.w, h: point.h, t: performance.now() });
       const max = Math.max(0, Math.round(this.settings.trailLength));
       while (this.trail.length > max) this.trail.shift();
@@ -7047,7 +7133,8 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
       this._smearDtT = now;
       dt = Math.min(dt, 0.05);
       const settings = this.settings;
-      const rect = settings.smear ? this.getActiveRect() : null;
+      const bodyless = this.styleFor("cursorStyle") === "None";
+      const rect = settings.smear && !bodyless ? this.getActiveRect() : null;
       if (!rect) {
         this.smearQuad = null;
         this.smearShape = null;
@@ -7255,10 +7342,13 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
      * Current shake offset, decaying to nothing over the configured duration.
      * @returns {{x: number, y: number} | null}
      */
+    /** Whether a shake is in flight — side-effect free, unlike shakeOffset(). */
+    isShaking() {
+      return !!this.settings.shakeEnabled && performance.now() < this._shakeUntil;
+    }
     shakeOffset() {
-      if (!this.settings.shakeEnabled) return null;
+      if (!this.isShaking()) return null;
       const now = performance.now();
-      if (now >= this._shakeUntil) return null;
       const dur = Math.max(60, this.settings.shakeDurationMs || 180);
       const remaining = (this._shakeUntil - now) / dur;
       const amp = (this.settings.shakeStrength || 3) * remaining;
@@ -7408,15 +7498,19 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
       const nowT = performance.now();
       const eff = this.settings;
       const animating = !!this._smoothMoving || !!this.pending || // A shake is a short, fast decay — it needs every frame it can get.
-      !!this.shakeOffset() || // The ghost keeps easing after the caret has stopped, so the caret
+      // Tested by its clock, not by calling shakeOffset(): that rolls fresh
+      // randoms, so asking twice per frame threw away one offset and painted
+      // the other.
+      this.isShaking() || // The ghost keeps easing after the caret has stopped, so the caret
       // settling is not enough to let the loop park.
       !!this._ghostMoving || this.trail.length > 0 || this.particles.length > 0 || this.flamePixels.length > 0 || this.thunderbolts.length > 0 || this.heat > 0 || !!this._smearMoving;
-      const energyShimmer = !!eff.energyEffect && !!this.lastActive;
+      const bodyless = eff.cursorStyle === "None";
+      const energyShimmer = !!eff.energyEffect && !!this.lastActive && !bodyless;
       const idleRamping = this._idleRamping();
       const recentInput = nowT - (this._lastActivityT || 0) < 1200;
       let blinkFading = false;
       let blinkBucket = 1;
-      if (eff.blinkingEnabled && this.lastActive) {
+      if (eff.blinkingEnabled && this.lastActive && !bodyless) {
         const a = blinkPhase(this, nowT);
         blinkFading = a > 0.02 && a < 0.98;
         blinkBucket = a >= 0.5 ? 1 : 0;
@@ -8320,7 +8414,8 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
         options: [
           { value: "Box", label: "Box" },
           { value: "Line", label: "Line" },
-          { value: "Underline", label: "Underline" }
+          { value: "Underline", label: "Underline" },
+          { value: "None", label: "None" }
         ],
         value: s.cursorStyle,
         onChange: /* @__PURE__ */ __name((v) => {
@@ -8328,9 +8423,12 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
           ctl.rerender();
         }, "onChange")
       }),
-      num("caretWidthPx", "Thickness", { min: 1, max: 12, step: 0.5, unit: "px" }),
-      slider("cursorOpacity", "Opacity", { min: 0.1, max: 1, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") }),
-      check("glow", "Glow", "Soft halo around the cursor. Needs the CRT effect to be on."),
+      s.cursorStyle === "None" ? optionNote("No cursor is drawn \u2014 Thymer\u2019s own caret stays visible and every effect below layers on top of it.") : null,
+      // Thickness is the LINE stem's width and nothing else reads it, so it was
+      // a dead control on Box and Underline.
+      s.cursorStyle === "Line" ? num("caretWidthPx", "Thickness", { min: 1, max: 12, step: 0.5, unit: "px" }) : null,
+      s.cursorStyle === "None" ? null : slider("cursorOpacity", "Opacity", { min: 0.1, max: 1, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") }),
+      s.cursorStyle === "None" ? null : check("glow", "Glow", "Soft halo around the cursor."),
       s.cursorStyle === "Box" ? checkShape("boxHollow", "Hollow", "Outline only, no fill.") : null,
       s.cursorStyle === "Box" && s.boxHollow ? sub([num("boxHollowWidth", "Outline width", { min: 1, max: 8, step: 0.5, unit: "px" })]) : null,
       s.cursorStyle === "Box" && !s.boxHollow ? check("showChar", "Show the letter inside", "Draws the character under the cursor in inverted colour.") : null,
@@ -8399,7 +8497,8 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
         slider("catchUpSpeed", "Catch-up speed", { min: 0.3, max: 0.8, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") }),
         checkShape("smoothAdaptive", "Speed up when typing fast"),
         s.smoothAdaptive ? sub([slider("maxCatchUpSpeed", "Max catch-up", { min: 0.5, max: 1, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") })]) : null,
-        check("smoothStopBlinking", "Don't blink while typing")
+        // Needs a blink to suppress.
+        s.blinkingEnabled ? check("smoothStopBlinking", "Don't blink while typing") : null
       ])] : [],
       // Outside the smoothEnabled block on purpose: it governs the smear and the
       // ghost too, both of which streak across line breaks with glide switched off.
@@ -8421,12 +8520,13 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
       s.popLetters ? sub([check("popRainbow", "Rainbow", "Step each letter through the colour wheel.")]) : null,
       checkShape("flameTrail", "Pixel trail", "A burst of fading pixels every time the cursor moves."),
       ...s.flameTrail ? [sub([
-        check("backspaceDisintegrate", "Backspace disintegration", "Deleting throws the pixels outward in inverted colours."),
-        checkShape("thunderstrike", "Thunderstrike", "Enter calls down a bolt of pixelated lightning onto the new line."),
-        ...s.thunderstrike ? [sub([
-          num("thunderstrikeSize", "Bolt size", { min: 1, max: 8, step: 1, unit: "px" }),
-          slider("thunderstrikeStrength", "Strength", { min: 0.1, max: 1, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") })
-        ])] : []
+        check("backspaceDisintegrate", "Backspace disintegration", "Deleting throws the pixels outward in inverted colours.")
+      ])] : [],
+      checkShape("thunderstrike", "Thunderstrike", "Enter calls down a bolt of pixelated lightning onto the new line."),
+      ...s.thunderstrike ? [sub([
+        num("thunderstrikeSize", "Bolt size", { min: 1, max: 8, step: 1, unit: "px" }),
+        slider("thunderstrikeStrength", "Strength", { min: 0.1, max: 1, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") }),
+        check("thunderstrikeHalo", "Halo", "A soft glow around the bolt.")
       ])] : [],
       checkShape("stardustEnabled", "Stardust", "A slow stream of drifting, fading motes."),
       ...s.stardustEnabled ? [sub([
@@ -8518,8 +8618,9 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
         slider("overlayIntensity", "Warmth", { min: 0, max: 1, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") }),
         color("overlayColor", "Light colour"),
         slider("overlaySpeed", "Follow speed", { min: 0.02, max: 1, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") }),
-        checkShape("overlayBlinkSync", "Blink sync", "The light breathes with the cursor\u2019s blink."),
-        s.overlayBlinkSync ? sub([slider("overlayBlinkDepth", "Blink depth", { min: 0.05, max: 0.6, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") })]) : null
+        // Needs a blink to sync to; with blinking off it did nothing at all.
+        s.blinkingEnabled ? checkShape("overlayBlinkSync", "Blink sync", "The light breathes with the cursor\u2019s blink.") : optionNote("Blink sync needs blinking switched on."),
+        s.overlayBlinkSync && s.blinkingEnabled ? sub([slider("overlayBlinkDepth", "Blink depth", { min: 0.05, max: 0.6, step: 0.01, format: /* @__PURE__ */ __name((v) => Math.round(v * 100) + "%", "format") })]) : null
       ])] : []
     ];
     const built = panel({ pluginClass: `${ROOT_CLASS}-panel` }, [
@@ -8724,7 +8825,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
   // plugin.js
   var PANEL_TYPE = "cursor-smith-settings";
   var PLUGIN_NAME = "Cursor Smith";
-  var PLUGIN_VERSION = "1.3.0";
+  var PLUGIN_VERSION = "1.4.0";
   var CANVAS_Z_INDEX = 60;
   var Plugin = class extends AppPlugin {
     static {
@@ -8904,9 +9005,10 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
     _applyBodyClasses() {
       const live = !!this._engine && !this._disabled;
       document.body.classList.toggle(BODY_ACTIVE_CLASS, live);
+      const bodyless = this._settings.cursorStyle === "None";
       document.body.classList.toggle(
         BODY_HIDE_NATIVE_CLASS,
-        live && !!this._settings.hideNativeCaret
+        live && !bodyless && !!this._settings.hideNativeCaret
       );
     }
     /** Push current settings into the engine. Guarded so panel edits made while
@@ -9043,7 +9145,30 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea {
             parentCls: sel.focusNode.parentElement?.className || null,
             inListitem: !!sel.focusNode.parentElement?.closest?.(".listitem[data-guid]")
           } : null,
-          engine: this._engine ? { gear: this._engine._canvasGear, source: this._engine._caretSource, hasCaret: !!this._engine.lastActive } : null
+          engine: this._engine ? {
+            gear: this._engine._canvasGear,
+            source: this._engine._caretSource,
+            hasCaret: !!this._engine.lastActive,
+            // Geometry, to catch the re-measure oscillation that was the
+            // main cause of the residual flicker.
+            h: this._engine.lastActive ? Math.round(this._engine.lastActive.h * 100) / 100 : null,
+            top: this._engine.lastActive ? Math.round(this._engine.lastActive.top * 100) / 100 : null
+          } : null,
+          // Whether our suppression is actually in force. If these classes are
+          // missing, every rule in styles.js is inert and Thymer's own caret
+          // is still blinking underneath ours.
+          bodyClasses: document.body.className,
+          suppressing: {
+            active: document.body.classList.contains(BODY_ACTIVE_CLASS),
+            hideNative: document.body.classList.contains(BODY_HIDE_NATIVE_CLASS),
+            // The proof: what the caret element actually computes to.
+            caretOpacity: (() => {
+              const el2 = document.querySelector(CARET_EL_SEL);
+              if (!el2) return null;
+              const cs = getComputedStyle(el2);
+              return { opacity: cs.opacity, animationName: cs.animationName, background: cs.backgroundColor };
+            })()
+          }
         });
       }, "sample");
       sample("start");
