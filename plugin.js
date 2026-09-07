@@ -4238,39 +4238,24 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} {
 	--ed-caret-code-bg: transparent;
 }
 
-/* The browser's own caret, for contenteditable rows and every generic field. */
+/* The browser's own caret on the editor's editable rows.
+
+   Scoped to .listitem rather than to any [contenteditable] under .panel: a
+   plugin's settings panel is also a .panel, so the looser selector hid the
+   caret in other plugins' editable fields \u2014 which we do not draw in. */
 body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels .panel .listitem,
 body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels .panel .line-div,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels .panel [contenteditable="true"] {
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels .panel .listitem [contenteditable="true"] {
 	caret-color: transparent !important;
 }
 
-/* Outside the editor panels \u2014 palette, search boxes, rename fields \u2014 the
-   generic caret path draws our cursor, so the native one is redundant there
-   too.
-
-   Modals are listed explicitly because several of them mount OUTSIDE
-   .app-chrome-panels, and the app-shell scope alone therefore missed them:
-   the browser's caret kept blinking in a dropdown or link menu while our
-   non-blinking one was drawn on top of it. Two carets, one of them blinking,
-   is the most literal form of the reported flicker.
-
-   Still gated on the body classes, so the plugin editor's Preview pane \u2014 which
-   never carries them \u2014 keeps its own caret. */
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels input,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels textarea,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .app-chrome-panels [contenteditable="true"],
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog input,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog textarea,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .cmdpal--dialog [contenteditable="true"],
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .dropdown input,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .dropdown textarea,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .dropdown [contenteditable="true"],
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .modal-container input,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .modal-container textarea,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .modal-container [contenteditable="true"],
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible input,
-body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible [contenteditable="true"] {
+/* The plugin's OWN preview textarea is the one surface outside the editor we
+   draw in, so it is the one surface outside the editor whose native caret we
+   hide. Everything else \u2014 the command palette, dropdowns, link menus, rename
+   fields, other plugins' settings \u2014 keeps its own caret, because we no longer
+   draw a cursor there: hiding a caret we are not replacing would leave those
+   fields with nothing at all. */
+body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .${ROOT_CLASS}-panel .cs-demo {
 	caret-color: transparent !important;
 }
 
@@ -4487,6 +4472,15 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible [contente
   // caret.js
   var THYMER_CARET_GRACE_MS = 120;
   var CARET_EL_SEL = "div.listview-caret-self";
+  function inPreviewBox(doc) {
+    try {
+      const active = doc.activeElement;
+      return !!(active && active.classList && active.classList.contains("cs-demo"));
+    } catch {
+      return false;
+    }
+  }
+  __name(inPreviewBox, "inPreviewBox");
   var FOCUSED_PANEL_SEL = ".panel.focused-panel, .panel.has-focus";
   var LISTITEM_SEL = ".listitem[data-guid]";
   function isTextCaretHost(el2) {
@@ -4976,6 +4970,11 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible [contente
       if (performance.now() - (e._lastThymerCaretT || 0) < THYMER_CARET_GRACE_MS) {
         return e.lastActive && e._caretSource === "thymer" ? e.lastActive : null;
       }
+    }
+    const doc = e.canvas?.ownerDocument ?? document;
+    if (!inPreviewBox(doc)) {
+      e._caretSource = "none";
+      return null;
     }
     e._caretSource = "generic";
     const g = genericCaretCoords(e);
@@ -6269,6 +6268,8 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible [contente
     }, "onMouseMove");
     const onKeyDown = /* @__PURE__ */ __name((ev) => {
       e.markActivity();
+      const inEditor = e._caretSource === "thymer" || inPreviewBox(e._doc || document);
+      if (!inEditor) return;
       if (ev.key === "Backspace" || ev.key === "Delete") {
         e._deletePending = performance.now();
         e.kickShake();
@@ -6554,7 +6555,8 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible [contente
               overlay.style.width = Math.round(rect.width) + "px";
               overlay.style.height = Math.round(rect.height) + "px";
             }
-            const hideForModal = !!e._modalOpen;
+            const inEditor = e._caretSource === "thymer" || inPreviewBox(doc);
+            const hideForModal = !!e._modalOpen || !inEditor;
             const pulse = !hideForModal && !!e.settings.overlayBlinkSync && !!e.settings.blinkingEnabled;
             let radius = e.settings.overlayRadius;
             if (pulse) {
@@ -8825,7 +8827,7 @@ body.${BODY_ACTIVE_CLASS}.${BODY_HIDE_NATIVE_CLASS} .link-menu-visible [contente
   // plugin.js
   var PANEL_TYPE = "cursor-smith-settings";
   var PLUGIN_NAME = "Cursor Smith";
-  var PLUGIN_VERSION = "1.4.0";
+  var PLUGIN_VERSION = "1.5.0";
   var CANVAS_Z_INDEX = 60;
   var Plugin = class extends AppPlugin {
     static {
